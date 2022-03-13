@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'dart:math' as math;
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:riverpod_todo/bloc/todo_bloc.dart';
 
 import 'package:uuid/uuid.dart';
 
 void main() {
   runApp(
-    const ProviderScope(
-      child: MyApp(),
-    ),
+    const MyApp(),
   );
 }
 
@@ -29,42 +27,6 @@ class Todo {
   final bool isDone;
 }
 
-class ListTodos extends StateNotifier<List<Todo>> {
-  ListTodos()
-      : super(
-          [
-            Todo('Quet nha', false),
-            Todo('Nau com', false),
-            Todo('Rua chen', false),
-          ],
-        );
-
-  void addTodo(String task) {
-    state = [
-      Todo(task, false),
-      for (int i = 0; i < state.length; i++) state[i]
-    ];
-  }
-
-  void checkTodo(Todo todo) {
-    state = [
-      for (int i = 0; i < state.length; i++)
-        todo.uuid == state[i].uuid ? state[i].copyWith(isDone: true) : state[i],
-    ];
-  }
-}
-
-final filterProvider = StateProvider(
-  (ref) => TodoFilter.all,
-);
-
-final listTodosProvider = StateNotifierProvider<ListTodos, List<Todo>>(
-  (ref) => ListTodos(),
-);
-
-final uncompleteTaskProvider = Provider(
-    (ref) => ref.watch(listTodosProvider).where((todo) => !todo.isDone).length);
-
 enum TodoFilter { all, onProcess, completed }
 
 class MyApp extends StatelessWidget {
@@ -73,7 +35,19 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
-      home: HomePage(),
+      home: Home(),
+    );
+  }
+}
+
+class Home extends StatelessWidget {
+  const Home({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocProvider(
+      create: (_) => TodoBloc()..add(const LoadTodo()),
+      child: const HomePage(),
     );
   }
 }
@@ -115,15 +89,14 @@ class TodoAppLabelsWidget extends StatelessWidget {
   }
 }
 
-class InputTodoWidget extends ConsumerStatefulWidget {
+class InputTodoWidget extends StatefulWidget {
   const InputTodoWidget({Key? key}) : super(key: key);
 
   @override
-  ConsumerState<ConsumerStatefulWidget> createState() =>
-      _InputTodoWidgetState();
+  State<InputTodoWidget> createState() => _InputTodoWidgetState();
 }
 
-class _InputTodoWidgetState extends ConsumerState<InputTodoWidget> {
+class _InputTodoWidgetState extends State<InputTodoWidget> {
   final TextEditingController _controller = TextEditingController();
 
   @override
@@ -135,7 +108,7 @@ class _InputTodoWidgetState extends ConsumerState<InputTodoWidget> {
         autofocus: false,
         onSubmitted: (value) {
           if (value != '') {
-            ref.read(listTodosProvider.notifier).addTodo(value);
+            context.read<TodoBloc>().add(AddTodos(value));
             _controller.text = '';
           }
           FocusScope.of(context).unfocus();
@@ -146,109 +119,117 @@ class _InputTodoWidgetState extends ConsumerState<InputTodoWidget> {
   }
 }
 
-class FilterTodoWidget extends ConsumerWidget {
+class FilterTodoWidget extends StatelessWidget {
   const FilterTodoWidget({Key? key}) : super(key: key);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          Expanded(
-              child: Center(
-            child: Text(
-              ref.watch(uncompleteTaskProvider).toString(),
-            ),
-          )),
-          ...TodoFilter.values
-              .map(
-                (filter) => Expanded(
-                  child: Center(
-                    child: TextButton(
-                      child: Text(
-                        filter.toString().split('.').last,
-                        style: TextStyle(
-                          color: ref.watch(filterProvider.state).state == filter
-                              ? Colors.blue
-                              : Colors.black87,
-                        ),
-                      ),
-                      onPressed: () {
-                        ref.read(filterProvider.state).state = filter;
-                      },
-                    ),
+      child: BlocBuilder<TodoBloc, TodoState>(
+        builder: (context, state) => state.when<Widget>(
+          (todos, filter) => Row(
+            children: [
+              Expanded(
+                child: Center(
+                  child: Text(
+                    todos.where((todo) => !todo.isDone).length.toString(),
                   ),
                 ),
-              )
-              .toList(),
-        ],
+              ),
+              ...TodoFilter.values
+                  .map(
+                    (f) => Expanded(
+                      child: Center(
+                        child: TextButton(
+                          child: Text(
+                            f.toString().split('.').last,
+                            style: TextStyle(
+                              color: filter == f ? Colors.blue : Colors.black87,
+                            ),
+                          ),
+                          onPressed: () {
+                            context.read<TodoBloc>().add(FilterTodo(f));
+                          },
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ],
+          ),
+          loading: () => Container(),
+        ),
       ),
     );
   }
 }
 
-class TodoListWidget extends ConsumerWidget {
+class TodoListWidget extends StatelessWidget {
   const TodoListWidget({Key? key}) : super(key: key);
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    TodoFilter filter = ref.watch(filterProvider);
+  Widget build(BuildContext context) {
+    return BlocBuilder<TodoBloc, TodoState>(
+      builder: (context, state) => state.when<Widget>((todosX, filter) {
+        List<Todo> todos = todosX;
+        if (filter == TodoFilter.completed) {
+          todos = todos.where((todo) => todo.isDone).toList();
+        } else if (filter == TodoFilter.onProcess) {
+          todos = todos.where((todo) => !todo.isDone).toList();
+        }
 
-    List<Todo> todos = ref.watch(listTodosProvider);
-
-    if (filter == TodoFilter.completed) {
-      todos = todos.where((todo) => todo.isDone).toList();
-    } else if (filter == TodoFilter.onProcess) {
-      todos = todos.where((todo) => !todo.isDone).toList();
-    }
-
-    if (todos.isEmpty) {
-      return SizedBox(
-        height: 300,
-        width: MediaQuery.of(context).size.width * 0.8,
-        child: const Card(
-          child: Center(
-            child: Text('No todos'),
-          ),
-        ),
-      );
-    } else {
-      return ListView.builder(
-        itemBuilder: (context, index) {
-          final currentItem = todos[index];
-
-          return Card(
-            margin: const EdgeInsets.symmetric(horizontal: 12),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(0)),
-            child: ListTile(
-              leading: !currentItem.isDone
-                  ? Checkbox(
-                      onChanged: (_) {
-                        ref
-                            .read(listTodosProvider.notifier)
-                            .checkTodo(currentItem);
-                      },
-                      value: currentItem.isDone,
-                    )
-                  : null,
-              title: Text(
-                currentItem.task,
-                style: TextStyle(
-                  color: currentItem.isDone ? Colors.grey : Colors.blue,
-                  decoration: currentItem.isDone
-                      ? TextDecoration.lineThrough
-                      : TextDecoration.none,
-                ),
+        if (todos.isEmpty) {
+          return SizedBox(
+            height: 300,
+            width: MediaQuery.of(context).size.width * 0.8,
+            child: const Card(
+              child: Center(
+                child: Text('No todos'),
               ),
             ),
           );
-        },
-        itemCount: todos.length,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-      );
-    }
+        } else {
+          return ListView.builder(
+            itemBuilder: (context, index) {
+              final currentItem = todos[index];
+
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(0)),
+                child: ListTile(
+                  leading: !currentItem.isDone
+                      ? Checkbox(
+                          onChanged: (_) {
+                            context
+                                .read<TodoBloc>()
+                                .add(ToogleTodo(currentItem));
+                          },
+                          value: currentItem.isDone,
+                        )
+                      : null,
+                  title: Text(
+                    currentItem.task,
+                    style: TextStyle(
+                      color: currentItem.isDone ? Colors.grey : Colors.blue,
+                      decoration: currentItem.isDone
+                          ? TextDecoration.lineThrough
+                          : TextDecoration.none,
+                    ),
+                  ),
+                ),
+              );
+            },
+            itemCount: todos.length,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+          );
+        }
+      },
+          loading: () => const Center(
+                child: CircularProgressIndicator(),
+              )),
+    );
   }
 }
